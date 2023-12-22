@@ -1,88 +1,71 @@
-import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.*;
 
-public class ParallelArraySumCalculator {
-
+public class Main {
     public static void main(String[] args) {
         int[] array = {1, 2, 3, 4, 5, 6};
-        calculateParallelArraySum(array);
+        calculateParallelSum(array);
     }
 
-    public static void calculateParallelArraySum(int[] array) {
-        List<int[]> iterations = new ArrayList<>();
-        iterations.add(array.clone());
+    public static void calculateParallelSum(int[] array) {
+        try (ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())) {
+            List<Integer> partialSums = calculatePartialSums(array, executorService);
 
-        ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+            while (partialSums.size() > 1) {
+                partialSums = calculatePartialSums(partialSums.stream().mapToInt(Integer::intValue).toArray(), executorService);
+                System.out.println("Проміжний результат обчислень: " + partialSums);
+            }
 
-        long startTime = System.nanoTime();
-
-        while (array.length > 1) {
-            array = calculateNextArray(array, executorService, iterations);
+            System.out.println("Фінальний результат: " + partialSums.get(0));
+        } catch (InterruptedException e) {
+            System.err.println("Помилка при очікуванні завершення потоків: " + e.getMessage());
         }
-
-        executorService.shutdown();
-
-        long endTime = System.nanoTime();
-        long executionTimeMs = (endTime - startTime) / 1_000_000; // Convert nanoseconds to milliseconds
-
-        // Print intermediate arrays
-        printIterations(iterations);
-
-        System.out.println("Final result: " + array[0]);
-        System.out.println("Execution time: " + executionTimeMs + " ms");
     }
 
-    private static int[] calculateNextArray(int[] array, ExecutorService executorService, List<int[]> iterations) {
-        int newArrayLength = (array.length % 2 == 0) ? array.length / 2 : (array.length / 2) + 1;
-        int[] newArray = new int[newArrayLength];
+    private static List<Integer> calculatePartialSums(int[] array, ExecutorService executorService) throws InterruptedException {
+        int newIterationArrayLength = (array.length % 2 == 0) ? array.length / 2 : (array.length / 2) + 1;
+        List<Integer> partialSums = new CopyOnWriteArrayList<>();
 
-        int[] results = new int[newArrayLength];
-        CountDownLatch latch = new CountDownLatch(newArrayLength);
+        CountDownLatch latch = new CountDownLatch(newIterationArrayLength);
+        for (int i = 0; i < newIterationArrayLength; i++) {
+            int[] finalArray = array;
+            int finalI = i;
 
-        for (int i = 0; i < newArrayLength; i++) {
-            final int index1 = i;
-            final int index2 = array.length - 1 - i;
-
-            int value = array[index1] + ((index2 >= newArrayLength) ? array[index2] : 0);
-
-            int finalIndex = i; // Add this line to make the variable effectively final
-
-            executorService.submit(() -> {
-                results[finalIndex] = value;
+            executorService.execute(() -> {
+                new ArraySumTask(finalArray, newIterationArrayLength, finalI, partialSums, latch).run();
                 latch.countDown();
             });
         }
 
-        awaitLatch(latch);
+        latch.await();
+        return partialSums;
+    }
+}
 
-        System.arraycopy(results, 0, newArray, 0, newArrayLength);
+class ArraySumTask implements Runnable {
+    private final int[] actualArray;
+    private final int newIterationArrayLength;
+    private final int index;
+    private final List<Integer> partialSums;
+    private final CountDownLatch latch;
 
-        iterations.add(newArray.clone());
-
-        return newArray;
+    ArraySumTask(int[] actualArray, int newIterationArrayLength, int index, List<Integer> partialSums, CountDownLatch latch) {
+        this.actualArray = actualArray;
+        this.newIterationArrayLength = newIterationArrayLength;
+        this.index = index;
+        this.partialSums = partialSums;
+        this.latch = latch;
     }
 
-    private static void awaitLatch(CountDownLatch latch) {
-        try {
-            latch.await();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
-    }
+    @Override
+    public void run() {
+        System.out.println(Thread.currentThread().getName() + " started work");
+        final int index2 = actualArray.length - 1 - index;
 
-    private static void printArray(int[] array) {
-        for (int element : array) {
-            System.out.print(element + " ");
-        }
-        System.out.println();
-    }
-
-    private static void printIterations(List<int[]> iterations) {
-        System.out.println("Intermediate arrays after each iteration:");
-        for (int i = 1; i < iterations.size(); i++) {
-            System.out.print("Iteration " + i + ": ");
-            printArray(iterations.get(i));
-        }
+        int value = actualArray[index] + ((index2 >= newIterationArrayLength) ? actualArray[index2] : 0);
+        partialSums.add(value);
+        System.out.println(index + " - finalIndex  " + partialSums);
+        latch.countDown();
     }
 }
